@@ -1,12 +1,19 @@
 import {List,Map,Record} from 'immutable';
 
-var Query = Record({
-  type: undefined,
-  name: undefined,
+class Query extends Record({
   field: undefined,
+  alias: undefined,
   args: List(),
   children: List()
-});
+}) {
+  responseKey() {
+    return this.alias || this.field.name;
+  }
+  graphKey() {
+    return this.field.name;
+  }
+};
+
 
 var pop = (stack) => {
   return [stack.first(), stack.pop()];
@@ -16,9 +23,7 @@ var addReferenceId = (schema, field, children) => {
   if (schema.isReferenceable(field) && !children.some(child => child.name === 'id')) {
     var idField = schema.getField(field, 'id');
 
-    return children.push(Query({
-      type: idField.type,
-      name: 'id',
+    return children.push(new Query({
       field: idField
     }))
   } else {
@@ -72,15 +77,46 @@ var parseChildren = (schema, parent, path) => {
   }
 }
 
+var makeCRCTable = function(){
+    var c;
+    var crcTable = [];
+    for(var n =0; n < 256; n++){
+        c = n;
+        for(var k =0; k < 8; k++){
+            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+        }
+        crcTable[n] = c;
+    }
+    return crcTable;
+}
+
+var crcTable = makeCRCTable();
+
+var crc32 = function(str) {
+    var crc = 0 ^ (-1);
+
+    for (var i = 0; i < str.length; i++ ) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ str.charCodeAt(i)) & 0xFF];
+    }
+
+    return (crc ^ (-1)) >>> 0;
+};
+
+var fieldAlias = (field, args) => {
+  if (!args.isEmpty()) {
+    var slug = args.map(arg => `.${arg.get('name')}(${arg.get('value')})`).join('');
+    return `${field.name}${Math.abs(crc32(slug)).toString(36)}`;
+  }
+}
+
 var parseField = (schema, field, path) => {
   var {args, path: rest} = parseArgs(schema, field, path);
   var children = parseChildren(schema, field, rest);
-  return Query({
-    type: field.type,
+  return new Query({
     field: field,
-    name: field.name,
+    alias: fieldAlias(field, args),
     args: args,
-    children: addReferenceId(schema, field, children)  // parseChildren(schema, field, rest)
+    children: addReferenceId(schema, field, children)
   });
 }
 
@@ -94,9 +130,16 @@ export function parsePath (schema, path) {
   return parseRoot(schema, path);
 }
 
+var stringifyName = (field) => {
+  if (field.alias) {
+    return `${field.alias}:${field.field.name}`;
+  } else {
+    return field.field.name;
+  }
+}
 
 var stringifyField = (field) => {
-  return `${field.get('name')}${stringifyArgs(field.get('args'))}${stringifyChildren(field.get('children'))}`;
+  return `${stringifyName(field)}${stringifyArgs(field.get('args'))}${stringifyChildren(field.get('children'))}`;
 }
 
 var stringifyChildren = (children) => {
@@ -117,11 +160,7 @@ var stringifyArgs = (args) => {
   }
 }
 
-var stringifyRoot = (root) => {
-  return `${root.get('name')}${stringifyArgs(root.get('args'))}${stringifyChildren(root.get('children'))}`;
-}
-
 export function stringifyQuery (query) {
-  var rootStrings = query.map(stringifyRoot);
+  var rootStrings = query.map(stringifyField);
   return `query { ${rootStrings.join(', ')} }`;
 }

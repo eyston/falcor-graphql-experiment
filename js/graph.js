@@ -4,7 +4,7 @@ var $ref = falcor.Model.ref;
 
 export function parseResponse(schema, queries, response) {
   return Map({ jsonGraph: queries.reduce((graph, query) => {
-    return parseQuery(schema, graph, queryPath(schema, query), query, response[query.name]);
+    return parseQuery(schema, graph, queryPath(schema, query), query, response[query.responseKey()]);
   }, Map())}).toJS();
 }
 
@@ -29,13 +29,12 @@ var parseQuery = (schema, graph, path, query, response) => {
     var root = schema.getReferenceRoot(query.field);
     var reference = query
       .set('field', root)
-      .set('args', List([Map({name: 'id', value: response.id })]))
-      .set('name', root.name);
+      .set('args', List([Map({name: 'id', value: response.id })]));
 
     return parseQuery(schema, graph.setIn(path, $ref(queryPath(schema, reference))), queryPath(schema, reference), reference, response);
   } else {
     return query.children.reduce((graph, query) => {
-      return parseQuery(schema, graph, path.concat(queryPath(schema, query)), query, response[query.name]);
+      return parseQuery(schema, graph, path.concat(queryPath(schema, query)), query, response[query.responseKey()]);
     }, graph);
   }
 }
@@ -48,6 +47,6 @@ var queryPath = (schema, query) => {
       .updateIn(['args'], args => args.filterNot(arg => arg.get('name') === 'to' || arg.get('name') === 'from'));
     return queryPath(schema, element);
   } else {
-    return List([query.name]).concat(query.args.map(arg => arg.get('value')));
+    return List([query.graphKey()]).concat(query.args.map(arg => arg.get('value')));
   }
 }

@@ -10,6 +10,7 @@ var schema = Schema.create({
   // scalars
   string: SCALAR,
   int: SCALAR,
+
   // complex
   Repository: {
     id: 'int',
@@ -23,6 +24,7 @@ var schema = Schema.create({
     description: 'string',
     repositories: { type: ['list', 'Repository'], args: ['from', 'to'] }
   },
+
   // root
   Query: {
     repository: { type: 'Repository', args: ['id'] },
@@ -80,12 +82,31 @@ var model = new falcor.Model({
 // });
 
 
+// model.get(
+//   ['repository', 10270250, 'organization', ['name', 'id', 'description']],
+//   ['repository', 10270250, 'organization', 'repositories', { to: 4 }, ['id', 'name']],
+//   ['repository', 10270250, 'name']).then((graph) => {
+//   console.log(graph);
+// });
+
+// model.get(
+//   ['repository', 19872456, 'organization', ['name', 'description']]).then((graph) => {
+//   console.log(JSON.stringify(graph, null, 2));
+// });
+
+// model.get(
+//   ['repository', 10270250, 'organization', 'name'],
+//   ['repository', 19872456, 'organization', 'name']).then((graph) => {
+//   console.log(JSON.stringify(graph, null, 2));
+// });
+
 model.get(
-  ['repository', 10270250, 'organization', ['name', 'id', 'description']],
-  ['repository', 10270250, 'organization', 'repositories', { to: 4 }, ['id', 'name']],
-  ['repository', 10270250, 'name']).then((graph) => {
-  console.log(graph);
+  ['repository', 10270250, 'organization', 'name'],
+  ['repository', 10270250, 'organization', 'link', 'REPOS'],
+  ['repository', 19872456, 'organization', 'description']).then((graph) => {
+  console.log(JSON.stringify(graph, null, 2));
 });
+
 
 // model.get(['organization', 8261421, 'repositories', {to: 4}, 'name']).then(graph => {
 //   console.log(JSON.stringify(graph, null, 2));

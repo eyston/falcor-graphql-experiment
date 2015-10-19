@@ -1,9 +1,13 @@
 import {List,Map,Record} from 'immutable';
 
+import {crc32,isObject} from './utils';
+import querystring from 'querystring';
+
 class Query extends Record({
   field: undefined,
   alias: undefined,
   args: List(),
+  range: List(),
   children: List()
 }) {
   responseKey() {
@@ -13,6 +17,11 @@ class Query extends Record({
     return this.field.name;
   }
 };
+
+class Argument extends Record({
+  name: undefined,
+  value: undefined
+}) { }
 
 
 var pop = (stack) => {
@@ -31,36 +40,97 @@ var addReferenceId = (schema, field, children) => {
   }
 }
 
-var nonCollectionArgs = (schema, field) => {
+// var parseCollectionArgs = (schema, field, path) => {
+//   // test if list and first 2 args are 'from' and 'to'
+//   if (schema.isCollection(field)) {
+//     var [value, rest] = pop(path);
+//     var args = List()
+//       .push(Map({name: 'to', value: value.to}))
+//       .push(Map({name: 'from', value: value.from || 0}));
+//
+//     return {args, path: rest};
+//   } else {
+//     return {args: List(), path};
+//   }
+// }
+
+// var parseArgs = (schema, field, path) => {
+//   var collectionArgs = parseCollectionArgs(schema, field, path);
+//
+//   return nonCollectionArgs(schema, field).reduce(({args, path}, arg) => {
+//     var [value, rest] = pop(path);
+//     return {args: args.push(Map({name: arg, value})), path: rest};
+//   }, collectionArgs);
+// }
+
+var parseRange = (schema, field, path) => {
   if (schema.isCollection(field)) {
-    return field.args.slice(2);
+    var [range, rest] = pop(path);
+    var args = List();
+
+    if (Array.isArray(range)) {
+      args = args
+        .push(new Argument({name: 'from', value: Math.min.apply(Math, range)}))
+        .push(new Argument({name: 'to', value: Math.max.apply(Math, range)}));
+    } else if (isObject(range)) {
+      var from = range.from || 0;
+      var to = range.to || (range.from + range.length - 1);
+      args = args
+        .push(new Argument({name: 'from', value: from}))
+        .push(new Argument({name: 'to', value: to}));
+    } else if (Number.isInteger(range)) {
+      args = args
+        .push(new Argument({name: 'from', value: range}))
+        .push(new Argument({name: 'to', value: range}));
+    } else {
+      throw `unhandled type of range: ${range}`;
+    }
+
+    return {args, path: rest};
+  } else {
+    return {args: List(), path}
+  }
+}
+
+var nonRangeArgs = (schema, field) => {
+  if (schema.isCollection(field)) {
+    return field.args.filterNot(arg => arg === 'to' || arg === 'from');
   } else {
     return field.args;
   }
 }
 
-var parseCollectionArgs = (schema, field, path) => {
-  // test if list and first 2 args are 'from' and 'to'
-  if (schema.isCollection(field)) {
-    var [value, rest] = pop(path);
-    var args = List()
-      .push(Map({name: 'to', value: value.to}))
-      .push(Map({name: 'from', value: value.from || 0}));
-
-    return {args, path: rest};
-  } else {
-    return {args: List(), path};
-  }
-}
-
 var parseArgs = (schema, field, path) => {
-  var collectionArgs = parseCollectionArgs(schema, field, path);
-
-  return nonCollectionArgs(schema, field).reduce(({args, path}, arg) => {
+  var args = nonRangeArgs(schema, field);
+  if (args.isEmpty()) {
+    return {args:List(), path}
+  } else if (args.size === 1) {
     var [value, rest] = pop(path);
-    return {args: args.push(Map({name: arg, value})), path: rest};
-  }, collectionArgs);
+    return {
+      args: List([new Argument({name: args.get(0), value: value})]),
+      path: rest
+    }
+  } else {
+    var [value, rest] = pop(path);
+    var values = querystring.parse(value);
+    return {
+      args: args.reduce((args, arg) => {
+        if (values[arg]) {
+          return args.push(new Argument({name: arg, value: values[arg]}));
+        } else {
+          return args;
+        }
+      }, List()),
+      path: rest
+    };
+    return {args: List([new Argument({name: args.get(0), value: value})])}
+  }
+  // return nonRangeArgs(schema, field).reduce(({args, path}, arg) => {
+  //   var [value, rest] = pop(path);
+  //   return {args: args.push(new Argument({name: arg, value})), path: rest};
+  // }, {args: List(), path});
 }
+
 
 var parseChildren = (schema, parent, path) => {
   if (path.isEmpty()) {
@@ -77,31 +147,6 @@ var parseChildren = (schema, parent, path) => {
   }
 }
 
-var makeCRCTable = function(){
-    var c;
-    var crcTable = [];
-    for(var n =0; n < 256; n++){
-        c = n;
-        for(var k =0; k < 8; k++){
-            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
-        }
-        crcTable[n] = c;
-    }
-    return crcTable;
-}
-
-var crcTable = makeCRCTable();
-
-var crc32 = function(str) {
-    var crc = 0 ^ (-1);
-
-    for (var i = 0; i < str.length; i++ ) {
-        crc = (crc >>> 8) ^ crcTable[(crc ^ str.charCodeAt(i)) & 0xFF];
-    }
-
-    return (crc ^ (-1)) >>> 0;
-};
-
 var fieldAlias = (field, args) => {
   if (!args.isEmpty()) {
     var slug = args.map(arg => `.${arg.get('name')}(${arg.get('value')})`).join('');
@@ -110,12 +155,15 @@ var fieldAlias = (field, args) => {
 }
 
 var parseField = (schema, field, path) => {
-  var {args, path: rest} = parseArgs(schema, field, path);
-  var children = parseChildren(schema, field, rest);
+  var args = parseArgs(schema, field, path);
+  var range = parseRange(schema, field, args.path);
+  var children = parseChildren(schema, field, range.path);
+
   return new Query({
     field: field,
-    alias: fieldAlias(field, args),
-    args: args,
+    alias: fieldAlias(field, args.args),
+    args: args.args,
+    range: range.args,
     children: addReferenceId(schema, field, children)
   });
 }
@@ -139,7 +187,7 @@ var stringifyName = (field) => {
 }
 
 var stringifyField = (field) => {
-  return `${stringifyName(field)}${stringifyArgs(field.get('args'))}${stringifyChildren(field.get('children'))}`;
+  return `${stringifyName(field)}${stringifyArgs(field.get('args'),field.get('range'))}${stringifyChildren(field.get('children'))}`;
 }
 
 var stringifyChildren = (children) => {
@@ -151,11 +199,12 @@ var stringifyChildren = (children) => {
   }
 }
 
-var stringifyArgs = (args) => {
-  if (args.isEmpty()) {
+var stringifyArgs = (args, range) => {
+  var all = args.concat(range);
+  if (all.isEmpty()) {
     return '';
   } else {
-    var argStrings = args.map(arg => `${arg.get('name')}: ${arg.get('value')}`);
+    var argStrings = all.map(arg => `${arg.get('name')}: ${arg.get('value')}`);
     return `(${argStrings.join(', ')})`;
   }
 }

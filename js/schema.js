@@ -1,5 +1,7 @@
 import {List,Map,Record} from 'immutable';
 
+import {isObject} from './utils';
+
 // types / fields / SCALAR should be treated as opaque tokens outside this file
 class Type extends Record({
   name: undefined,
@@ -14,10 +16,6 @@ class Field extends Record({
 }) { }
 
 export const SCALAR = 'scalar';
-
-var isObject = (value) => {
-  return value !== null && typeof(value) === 'object';
-}
 
 var field = (key, def) => {
   if (isObject(def)) {
@@ -52,15 +50,22 @@ var type = (key, def) => {
 
 // private -- want flexibility to change the schema data structure
 var getBaseType = (schema, name) => {
+  var type;
   if (name instanceof Type) {
-    return name;
+    type = name;
   } else if (name instanceof Field) {
-    return getBaseType(schema, name.type);
+    type = getBaseType(schema, name.type);
   } else if (Array.isArray(name)) {
     var baseName = name[name.length - 1];
-    return schema.types.get(baseName);
+    type = schema.types.get(baseName);
   } else {
-    return schema.types.get(name);
+    type = schema.types.get(name);
+  }
+
+  if (!type) {
+    throw `Could not find type ${name}`;
+  } else {
+    return type;
   }
 }
 
@@ -71,7 +76,13 @@ export class Schema extends Object {
   }
 
   getField(typeOrField, name) {
-    return getBaseType(this, typeOrField).fields.get(name);
+    var type = getBaseType(this, typeOrField);
+    var field = type.fields.get(name);
+    if (!field) {
+      throw `Could not find field ${name} on ${type.name}`;
+    } else {
+      return field;
+    }
   }
 
   getQueryType() {

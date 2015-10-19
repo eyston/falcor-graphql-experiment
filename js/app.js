@@ -15,14 +15,16 @@ var schema = Schema.create({
   Repository: {
     id: 'int',
     name: 'string',
-    organization: 'Organization'
+    organization: 'Organization',
+    description: 'string',
   },
   Organization: {
     id: 'int',
     name: 'string',
     link: { type: 'string', args: ['type'] },
     description: 'string',
-    repositories: { type: ['list', 'Repository'], args: ['from', 'to'] }
+    repositories: { type: ['list', 'Repository'], args: ['from', 'to'] },
+    repositoriesDos: { type: ['list', 'Repository'], args: ['from', 'to', 'startsWith', 'orderBy']}
   },
 
   // root
@@ -100,17 +102,20 @@ var model = new falcor.Model({
 //   console.log(JSON.stringify(graph, null, 2));
 // });
 
-model.get(
-  ['repository', 10270250, 'organization', 'name'],
-  ['repository', 10270250, 'organization', 'link', 'REPOS'],
-  ['repository', 19872456, 'organization', 'description']).then((graph) => {
-  console.log(JSON.stringify(graph, null, 2));
-});
-
-
-// model.get(['organization', 8261421, 'repositories', {to: 4}, 'name']).then(graph => {
+// model.get(
+//   ['repository', 10270250, 'organization', 'name'],
+//   ['repository', 10270250, 'organization', 'link', 'REPOS'],
+//   ['repository', 19872456, 'organization', 'description']).then((graph) => {
 //   console.log(JSON.stringify(graph, null, 2));
 // });
+
+// model.get(['organization', 8261421, 'repositoriesDos', 'startsWith="r"&orderBy="name"', {from: 1, to: 2}, ['name', 'description']]).then(graph => {
+//   console.log(JSON.stringify(graph, null, 2));
+// });
+
+model.get(['organization', 8261421, 'repositoriesDos', '__default__', {from: 1, to: 2}, ['name', 'description']]).then(graph => {
+  console.log(JSON.stringify(graph, null, 2));
+});
 
 // model.get('organization[69631].repositories[0..10].name').then(graph => {
 //   console.log(graph);

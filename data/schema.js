@@ -54,7 +54,18 @@ var organizationType = new GraphQLObjectType({
         from: { type: new GraphQLNonNull(GraphQLInt) },
         to: { type: new GraphQLNonNull(GraphQLInt) }
       },
-      resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to)
+      resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to + 1)
+    },
+    repositoriesDos: {
+      type: new GraphQLList(repositoryType),
+      args: {
+        from: { type: new GraphQLNonNull(GraphQLInt) },
+        to: { type: new GraphQLNonNull(GraphQLInt) },
+        startsWith: { type: GraphQLString },
+        orderBy: { type: GraphQLString }
+      },
+      resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to + 1)
+        .filter(repo => args.startsWith ? repo.name && repo.name.indexOf(args.startsWith) === 0 : true)
     }
   })
 });

@@ -35,12 +35,13 @@ var organizationType = new GraphQLObjectType({
   name: 'Organization',
   description: 'A Github Organization',
   fields: () => ({
-    id: { type: GraphQLInt },
+    id: { type: new GraphQLNonNull(GraphQLInt) },
     login: { type: GraphQLString },
     name: { type: GraphQLString },
     description: { type: GraphQLString },
     publicRepos: { type: GraphQLInt, resolve: dot('public_repos') },
     created: { type: dateType, resolve: org => new Date(org.created_at) },
+    updated: { type: dateType, resolve: org => new Date(org.created_at) },
     link: {
       type: GraphQLString,
       args: {
@@ -48,7 +49,15 @@ var organizationType = new GraphQLObjectType({
       },
       resolve: (org, args) => org[args.type]
     },
-    repositories: {
+    thumbnail: {
+      type: GraphQLString,
+      args: {
+        width: { type: GraphQLInt, defaultValue: 50 },
+        height: { type: GraphQLInt, defaultValue: 50 },
+      },
+      resolve: (org, args) => `http://placehold.it/${args.width}x${args.height}`
+    },
+    repositoriesOld: {
       type: new GraphQLList(repositoryType),
       args: {
         from: { type: new GraphQLNonNull(GraphQLInt) },
@@ -56,8 +65,8 @@ var organizationType = new GraphQLObjectType({
       },
       resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to + 1)
     },
-    repositoriesDos: {
-      type: new GraphQLList(repositoryType),
+    repositories: {
+      type: new GraphQLNonNull(new GraphQLList(repositoryType)),
       args: {
         from: { type: new GraphQLNonNull(GraphQLInt) },
         to: { type: new GraphQLNonNull(GraphQLInt) },
@@ -87,12 +96,16 @@ var repositoryType = new GraphQLObjectType({
   name: 'Repository',
   description: 'A Github Repository',
   fields: () => ({
-    id: { type: GraphQLInt },
+    id: { type: new GraphQLNonNull(GraphQLInt) },
     name: { type: GraphQLString },
     fullName: { type: GraphQLString, resolve: dot('full_name') },
     description: { type: GraphQLString },
     organization: {
       type: organizationType,
+      resolve: repo => getOrganization(repo.organization.id)
+    },
+    organizationDos: {
+      type: new GraphQLNonNull(organizationType),
       resolve: repo => getOrganization(repo.organization.id)
     }
   })

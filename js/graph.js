@@ -1,72 +1,97 @@
 import {List,Map,Range} from 'immutable';
 
+import {Argument} from './query';
+
 var $ref = falcor.Model.ref;
 
 export function parseResponse(schema, queries, response) {
-  return Map({ jsonGraph: queries.reduce((graph, query) => {
-    return parseQuery(schema, graph, List(), query, response[query.responseKey()]);
+  return Map({jsonGraph: queries.reduce((graph, query) => {
+    return parseQuery(schema, graph, List(), query, response[query.responseKey]);
   }, Map())}).toJS();
 }
 
 var parseQuery = (schema, graph, path, query, response) => {
-  var qp = path.concat(queryPath(schema, query));
-  if (schema.isScalar(query.field)) {
-    return graph.setIn(qp, response);
-  } else if (response === undefined || response === null) {
-    return graph.setIn(qp, null);
-  } else if (schema.isCollection(query.field)) {
-      var startIndex = query.range.find(arg => arg.get('name') === 'from').get('value');
-      var endIndex = query.range.find(arg => arg.get('name') === 'to').get('value');
 
-      var element = query
-        .updateIn(['field', 'type'], type => type[type.length - 1])
-        // .setIn(['field', 'args'], List())
-        .set('args', List());
-        // .updateIn(['field', 'args'], args => args.filterNot(arg => arg === 'to' || arg === 'from'))
-        // .setIn(['field', 'args'], List())
-        // .updateIn(['args'], args => args);
+  if (!response) {
+    return graph.setIn(path.concat(queryPath(query)), 'null');
+  }
 
-      // qp = path.concat(queryPath(element));
-      qp = path.concat(queryPath(schema, query));
-
-      return Range(startIndex, endIndex + 1).reduce((graph, collectionIndex, responseIndex) => {
-          return parseQuery(schema, graph, qp, element.setIn(['field', 'name'], collectionIndex), response[responseIndex] || null);
-      }, graph);
-  } else if (schema.isReferenceable(query.field) && !path.isEmpty()) {
-    var root = schema.getReferenceRoot(query.field);
-    var reference = query
-      .set('field', root)
-      .set('args', List([Map({name: 'id', value: response.id })]));
-
-    return parseQuery(schema, graph.setIn(qp, $ref(queryPath(schema, reference))), List(), reference, response);
-  } else {
-    return query.children.reduce((graph, query) => {
-      return parseQuery(schema, graph, qp, query, response[query.responseKey()]);
-    }, graph);
+  switch(query.field.type.kind) {
+    case 'OBJECT':
+      return parseObject(schema, graph, path, query, response);
+    case 'SCALAR':
+      return parseScalar(schema, graph, path, query, response);
+    case 'NON_NULL':
+      return parseNonNull(schema, graph, path, query, response);
+    case 'REFERENCE':
+      return parseReference(schema, graph, path, query, response);
+    case 'INDEX_COLLECTION':
+      return parseIndexCollection(schema, graph, path, query, response);
+    default:
+      throw `Unhandled kind ${query.field.type.kind}`;
   }
 }
 
-var nonRangeArgs = (schema, field) => {
-  if (schema.isCollection(field)) {
-    return field.args.filterNot(arg => arg === 'to' || arg === 'from');
-  } else {
-    return field.args;
-  }
-}
-
-var queryPath = (schema, query) => {
+var queryPath = (query) => {
   var field = query.field;
-  var args = nonRangeArgs(schema, field);
+  var args = field.args;
   if (args.isEmpty()) {
-    return List([query.graphKey()]);
-  } else if (args.size === 1 && query.args.size === 1) {
-    return List([query.graphKey()]).push(query.args.first().get('value'));
+    return List([query.graphKey]);
+  } else if (args.size === 1 && args.first().isRequired()) {
+    return List([query.graphKey]).push(query.args.first().value);
   } else if (args.size > 1 && !query.args.isEmpty()) {
-    return List([query.graphKey()]).push(query.args.map(arg => {
+    return List([query.graphKey]).push(query.args.map(arg => {
       return `${arg.name}=${arg.value}`;
     }).join('&'));
   } else {
-    return List([query.graphKey()]);
+    // console.log('default', JSON.stringify(field.args, null, 2), JSON.stringify(query.args, null, 2));
+    return List([query.graphKey, '__default__']);
   }
-  // return List([query.graphKey()]).concat(query.args.map(arg => arg.get('value')));
+}
+
+
+var parseObject = (schema, graph, path, query, response) => {
+  var qp = path.concat(queryPath(query));
+  return query.children.reduce((graph, query) => {
+    return parseQuery(schema, graph, qp, query, response[query.responseKey]);
+  }, graph);
+}
+
+var parseScalar = (schema, graph, path, query, response) => {
+  var qp = path.concat(queryPath(query));
+  return graph.setIn(qp, response);
+}
+
+var parseInnerType = (schema, graph, path, query, response) => {
+  return parseQuery(schema, graph, path, query.updateIn(['field', 'type'], type => type.ofType), response);
+}
+
+var parseNonNull = parseInnerType;
+
+var parseReference = (schema, graph, path, query, response) => {
+  var qp = path.concat(queryPath(query));
+
+  var root = schema.getReferenceField(query.field.type);
+  var reference = query
+    .set('field', root)
+    // TODO: this is gross ...
+    .set('graphKey', root.name)
+    // TODO: this is gross ...
+    .set('args', List.of(new Argument({name: 'id', value: response.id})));
+
+  return parseQuery(schema, graph.setIn(qp, $ref(queryPath(reference))), List(), reference, response);
+}
+
+var parseIndexCollection = (schema, graph, path, query, response) => {
+
+  var startIndex = query.range.find(arg => arg.name === 'from').value;
+  var endIndex = query.range.find(arg => arg.name === 'to').value;
+
+  var qp = path.concat(queryPath(query));
+
+  var element = query.set('args', List()).setIn(['field', 'args'], List()); // meh
+
+  return Range(startIndex, endIndex + 1).toArray().reduce((graph, collectionIndex, responseIndex) => {
+    return parseInnerType(schema, graph, qp, element.set('graphKey', collectionIndex), response[responseIndex]);
+  }, graph);
 }

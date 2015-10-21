@@ -13,6 +13,7 @@
     "falcor": "^0.1.13",
     "graphql": "^0.4.7",
     "immutable": "^3.7.5",
+    "json-loader": "^0.5.3",
     "rx": "^4.0.0",
     "superagent": "^1.4.0",
     "webpack": "^1.12.2",

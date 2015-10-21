@@ -3,191 +3,227 @@ import {List,Map,Record} from 'immutable';
 import {crc32,isObject} from './utils';
 import querystring from 'querystring';
 
-class Query extends Record({
+export class Query extends Record({
   field: undefined,
+  name: undefined, // maybe rename or something I dunno man
   alias: undefined,
   args: List(),
   range: List(),
-  children: List()
-}) {
-  responseKey() {
-    return this.alias || this.field.name;
-  }
-  graphKey() {
-    return this.field.name;
-  }
-};
+  children: List(),
 
-class Argument extends Record({
+  graphKey: undefined,
+  responseKey: undefined,
+
+}) { }
+
+var generateAlias = (name, args) => {
+  if (args && !args.isEmpty()) {
+    var slug = args.map(arg => `.${arg.name}(${arg.value})`).join('');
+    return `${name}${Math.abs(crc32(slug)).toString(36)}`;
+  }
+}
+
+var query = (field, attrs = Map()) => {
+  var alias = generateAlias(field.name, attrs.get('args'));
+  return new Query(Map({
+    field: field,
+    name: field.name,
+    alias: alias,
+    graphKey: field.name,
+    responseKey: alias || field.name,
+  }).merge(attrs));
+}
+
+export class Argument extends Record({
   name: undefined,
   value: undefined
 }) { }
 
+export class Range extends Record({
+  to: undefined,
+  from: undefined
+}) { }
 
 var pop = (stack) => {
   return [stack.first(), stack.pop()];
 }
 
-var addReferenceId = (schema, field, children) => {
-  if (schema.isReferenceable(field) && !children.some(child => child.name === 'id')) {
-    var idField = schema.getField(field, 'id');
-
-    return children.push(new Query({
-      field: idField
-    }))
+var toList = (itemOrArray) => {
+  if (Array.isArray(itemOrArray)) {
+    return List(itemOrArray);
   } else {
-    return children;
+    return List.of(itemOrArray);
   }
 }
 
-// var parseCollectionArgs = (schema, field, path) => {
-//   // test if list and first 2 args are 'from' and 'to'
-//   if (schema.isCollection(field)) {
-//     var [value, rest] = pop(path);
-//     var args = List()
-//       .push(Map({name: 'to', value: value.to}))
-//       .push(Map({name: 'from', value: value.from || 0}));
-//
-//     return {args, path: rest};
-//   } else {
-//     return {args: List(), path};
-//   }
-// }
-
-// var parseArgs = (schema, field, path) => {
-//   var collectionArgs = parseCollectionArgs(schema, field, path);
-//
-//   return nonCollectionArgs(schema, field).reduce(({args, path}, arg) => {
-//     var [value, rest] = pop(path);
-//     return {args: args.push(Map({name: arg, value})), path: rest};
-//   }, collectionArgs);
-// }
-
-var parseRange = (schema, field, path) => {
-  if (schema.isCollection(field)) {
-    var [range, rest] = pop(path);
-    var args = List();
-
-    if (Array.isArray(range)) {
-      args = args
-        .push(new Argument({name: 'from', value: Math.min.apply(Math, range)}))
-        .push(new Argument({name: 'to', value: Math.max.apply(Math, range)}));
-    } else if (isObject(range)) {
-      var from = range.from || 0;
-      var to = range.to || (range.from + range.length - 1);
-      args = args
-        .push(new Argument({name: 'from', value: from}))
-        .push(new Argument({name: 'to', value: to}));
-    } else if (Number.isInteger(range)) {
-      args = args
-        .push(new Argument({name: 'from', value: range}))
-        .push(new Argument({name: 'to', value: range}));
-    } else {
-      throw `unhandled type of range: ${range}`;
-    }
-
-    return {args, path: rest};
-  } else {
-    return {args: List(), path}
-  }
-}
-
-var nonRangeArgs = (schema, field) => {
-  if (schema.isCollection(field)) {
-    return field.args.filterNot(arg => arg === 'to' || arg === 'from');
-  } else {
-    return field.args;
-  }
-}
-
-var parseArgs = (schema, field, path) => {
-  var args = nonRangeArgs(schema, field);
-  if (args.isEmpty()) {
-    return {args:List(), path}
-  } else if (args.size === 1) {
+var parseArgs = (field, path) => {
+  if (field.args.isEmpty()) {
+    return {args: List.of(List()), path};
+  } else if (field.args.size === 1 && field.args.first().isRequired()) {
+    var arg = field.args.first();
     var [value, rest] = pop(path);
     return {
-      args: List([new Argument({name: args.get(0), value: value})]),
-      path: rest
-    }
-  } else {
-    var [value, rest] = pop(path);
-    var values = querystring.parse(value);
-    return {
-      args: args.reduce((args, arg) => {
-        if (values[arg]) {
-          return args.push(new Argument({name: arg, value: values[arg]}));
-        } else {
-          return args;
-        }
-      }, List()),
+      args: toList(value)
+        .map(value => List.of(new Argument({name: arg.name, value: value}))),
       path: rest
     };
-    return {args: List([new Argument({name: args.get(0), value: value})])}
-  }
-  // return nonRangeArgs(schema, field).reduce(({args, path}, arg) => {
-  //   var [value, rest] = pop(path);
-  //   return {args: args.push(new Argument({name: arg, value})), path: rest};
-  // }, {args: List(), path});
-}
-
-
-var parseChildren = (schema, parent, path) => {
-  if (path.isEmpty()) {
-    return List();
   } else {
-    var [names, rest] = pop(path);
-    if (Array.isArray(names)) {
-      return List(names).map((name) => {
-        return parseField(schema, schema.getField(parent, name), rest);
-      });
-    } else {
-      return List([parseField(schema, schema.getField(parent, names), rest)]);
-    }
+    var [value, rest] = pop(path);
+    // TODO: replace this with something that handles all types ...
+    //       maybe copy GraphQL syntax instead of query string syntax
+    return {
+      args: toList(value)
+        .map(value => {
+          // TODO: validate that all named values exist yo
+          // TODO: validate all required fields are provided ... mebe
+          if (value === '__default__') {
+            return List();
+          } else {
+            var values = querystring.parse(value);
+            return field.args.reduce((args, arg) => {
+              var name = arg.name;
+              if (values[name]) {
+                return args.push(new Argument({name, value: values[name]}));
+              } else {
+                return args;
+              }
+            }, List())
+          }
+        }),
+      path: rest
+    };
   }
 }
 
-var fieldAlias = (field, args) => {
-  if (!args.isEmpty()) {
-    var slug = args.map(arg => `.${arg.get('name')}(${arg.get('value')})`).join('');
-    return `${field.name}${Math.abs(crc32(slug)).toString(36)}`;
+var parseInnerType = (schema, field, path) => {
+  return parseField(schema, field.updateIn(['type'], type => type.ofType), path);
+}
+
+var parseNonNull = parseInnerType;
+
+var parseReference = (schema, field, path) => {
+  return parseInnerType(schema, field, path)
+    .updateIn(['children'], children => {
+      if (children.find(child => child.name === 'id')) {
+        return children;
+      } else {
+        var idField = schema.getField(field.type, 'id');
+        return children.push(query(idField));
+      }
+    });
+}
+
+var normalizeRange = (range) => {
+  if (Array.isArray(range)) {
+    return new Range({
+      from: Math.min.apply(Math, range),
+      to: Math.max.apply(Math, range)
+    });
+  } else if (isObject(range)) {
+    var from = range.from || 0;
+    var to = range.to || (range.from + range.length - 1);
+    return new Range({from, to});
+  } else if (Number.isInteger(range)) {
+    return new Range({
+      from: range,
+      to: range
+    });
+  } else {
+    throw `unhandled type of range: ${range}`;
   }
 }
 
-var parseField = (schema, field, path) => {
-  var args = parseArgs(schema, field, path);
-  var range = parseRange(schema, field, args.path);
-  var children = parseChildren(schema, field, range.path);
+var parseIndexCollectionRange = (field, path) => {
+  var [range, rest] = pop(path);
+  range = normalizeRange(range);
 
-  return new Query({
-    field: field,
-    alias: fieldAlias(field, args.args),
-    args: args.args,
-    range: range.args,
-    children: addReferenceId(schema, field, children)
+  return {
+    range,
+    path: rest
+  };
+}
+
+var rangeToArguments = (range) => {
+  return List.of(
+    new Argument({name: 'from', value: range.from}),
+    new Argument({name: 'to', value: range.to})
+  );
+}
+
+var parseIndexCollection = (schema, field, path) => {
+  var {range, path: rest} = parseIndexCollectionRange(field, path);
+
+  return Map({
+    range: rangeToArguments(range),
+  }).merge(parseInnerType(schema, field, rest));
+}
+
+var parseScalar = (_, field, path) => {
+  if (!path.isEmpty()) {
+    throw `path should be empty after SCALAR kind but was ${path.toJS()}`
+  }
+
+  return Map();
+}
+
+var parseObject = (schema, field, path) => {
+  var children = parseType(schema, field.type, path);
+
+  return Map({
+    children: children
   });
 }
 
-var parseRoot = (schema, path) => {
-  var [name, rest] = pop(path);
-  var root = schema.getQueryType();
-  return parseField(schema, schema.getField(root, name), rest);
-}
+var parseField = (schema, field, path) => {
+  // TODO: support 'LIST'
+  // TODO: support 'CURSOR_COLLECTION'
 
-export function parsePath (schema, path) {
-  return parseRoot(schema, path);
-}
-
-var stringifyName = (field) => {
-  if (field.alias) {
-    return `${field.alias}:${field.field.name}`;
-  } else {
-    return field.field.name;
+  switch(field.type.kind) {
+    case 'OBJECT':
+      return parseObject(schema, field, path);
+    case 'SCALAR':
+      return parseScalar(schema, field, path);
+    case 'NON_NULL':
+      return parseNonNull(schema, field, path);
+    case 'REFERENCE':
+      return parseReference(schema, field, path);
+    case 'INDEX_COLLECTION':
+      return parseIndexCollection(schema, field, path);
+    default:
+      throw `Unhandled kind ${field.type.kind}`;
   }
 }
 
-var stringifyField = (field) => {
-  return `${stringifyName(field)}${stringifyArgs(field.get('args'),field.get('range'))}${stringifyChildren(field.get('children'))}`;
+var parseType = (schema, type, path) => {
+  var [name, rest] = pop(path);
+
+  return toList(name).flatMap(name => {
+    var field = schema.getField(type, name);
+    var args = parseArgs(field, rest);
+
+    return args.args.map(arg => {
+      return query(field, parseField(schema, field, args.path).set('args', arg));
+    });
+  });
+}
+
+export function parsePath (schema, path) {
+  var type = schema.getQueryType();
+  return parseType(schema, type, path);
+}
+
+
+
+var stringifyName = (query) => {
+  if (query.alias) {
+    return `${query.alias}:${query.field.name}`;
+  } else {
+    return query.field.name;
+  }
+}
+
+var stringifyField = (query) => {
+  return `${stringifyName(query)}${stringifyArgs(query)}${stringifyChildren(query.children)}`;
 }
 
 var stringifyChildren = (children) => {
@@ -199,12 +235,22 @@ var stringifyChildren = (children) => {
   }
 }
 
-var stringifyArgs = (args, range) => {
-  var all = args.concat(range);
-  if (all.isEmpty()) {
+var stringifyArgValue = (query, arg) => {
+  // hacky
+  var fieldArg = query.field.args.find(farg => farg.name === arg.name);
+  if (fieldArg && fieldArg.type.baseType().name === 'String') {
+    return `"${arg.value}"`;
+  } else {
+    return `${arg.value}`;
+  }
+}
+
+var stringifyArgs = (query) => {
+  var args = query.args.concat(query.range);
+  if (args.isEmpty()) {
     return '';
   } else {
-    var argStrings = all.map(arg => `${arg.get('name')}: ${arg.get('value')}`);
+    var argStrings = args.map(arg => `${arg.name}: ${stringifyArgValue(query, arg)}`);
     return `(${argStrings.join(', ')})`;
   }
 }

@@ -1,126 +1,190 @@
 import {List,Map,Record} from 'immutable';
 
-import {isObject} from './utils';
-
-// types / fields / SCALAR should be treated as opaque tokens outside this file
-class Type extends Record({
+class TypeDefinition extends Record({
+  kind: undefined,
   name: undefined,
-  scalar: false,
-  fields: Map()
+  fields: List()
 }) { }
 
-class Field extends Record({
+class FieldDefinition extends Record({
   name: undefined,
   type: undefined,
   args: List()
 }) { }
 
-export const SCALAR = 'scalar';
-
-var field = (key, def) => {
-  if (isObject(def)) {
-    return new Field({
-      name: key,
-      type: def.type,
-      args: List(def.args)
-    });
-  } else {
-    return new Field({
-      name: key,
-      type: def
-    });
+class Argument extends Record({
+  name: undefined,
+  type: undefined
+}) {
+  isRequired() {
+    return this.type.kind === 'NON_NULL';
   }
 }
 
-var type = (key, def) => {
-  if (def === SCALAR) {
-    return new Type({
-      name: key,
-      scalar: true
-    });
-  } else {
-    return new Type({
-      name: key,
-      fields: Map(Object.keys(def).map(key => {
-        return [key, field(key, def[key])];
-      }))
-    });
+class Type extends Record ({
+  kind: undefined,
+  name: undefined,
+  ofType: null
+}) {
+  baseType() {
+    if (this.ofType) {
+      return this.ofType.baseType();
+    } else {
+      return this;
+    }
   }
 }
 
-// private -- want flexibility to change the schema data structure
-var getBaseType = (schema, name) => {
-  var type;
-  if (name instanceof Type) {
-    type = name;
-  } else if (name instanceof Field) {
-    type = getBaseType(schema, name.type);
-  } else if (Array.isArray(name)) {
-    var baseName = name[name.length - 1];
-    type = schema.types.get(baseName);
-  } else {
-    type = schema.types.get(name);
+var toType = (json) => {
+  if (json) {
+    return new Type({
+      kind: json.kind,
+      name: json.name,
+      ofType: toType(json.ofType)
+    });
   }
+};
 
-  if (!type) {
-    throw `Could not find type ${name}`;
+var mapFields = (schema, fn) => {
+  return schema.types.map(type => {
+    return type.updateIn(['fields'], (fields) => fields.map(field => fn(schema, field)));
+  });
+}
+
+var isRoot = (type, field) => {
+  return field.type !== type
+    && field.type.equals(type)
+    && field.args.size === 1
+    && field.args.first().name === 'id';
+}
+
+var getRoot = (schema, fieldType) => {
+  if (fieldType.ofType) {
+    return getRoot(schema, fieldType.ofType);
+  } else {
+    var query = schema.getQueryType();
+    return query.fields.find(field => isRoot(fieldType, field));
+  }
+}
+
+var makeReference = (type) => {
+  if (type.ofType) {
+    return type.updateIn(['ofType'], ofType => makeReference(ofType));
+  } else {
+    return new Type({kind: 'REFERENCE', ofType: type});
+  }
+}
+
+var referenceTransformer = (schema, field) => {
+  var root = getRoot(schema, field.type);
+  if (root) {
+    return field.updateIn(['type'], type => makeReference(type));
+  } else {
+    return field;
+  }
+}
+
+var containsKind = (type, kind) => {
+  if (type.kind === kind) {
+    return true;
+  } else if (type.ofType) {
+    return containsKind(type.ofType, kind);
+  } else {
+    return false;
+  }
+}
+
+var changeKind = (type, kind, newKind) => {
+  if (type.kind === kind) {
+    return type.set('kind', newKind);
+  } else if (type.ofType) {
+    return type.updateIn(['ofType'], ofType => changeKind(ofType, kind, newKind));
   } else {
     return type;
   }
 }
 
-export class Schema extends Object {
-  constructor(types) {
-    super(types);
-    this.types = types;
-  }
+var isIndexCollection = (field) => {
+  // TODO: maybe add type checks that to / from are int?
+  return containsKind(field.type, 'LIST')
+    && field.args.find(arg => arg.name === 'to')
+    && field.args.find(arg => arg.name === 'from');
+}
 
-  getField(typeOrField, name) {
-    var type = getBaseType(this, typeOrField);
-    var field = type.fields.get(name);
-    if (!field) {
-      throw `Could not find field ${name} on ${type.name}`;
-    } else {
-      return field;
-    }
+var indexCollectionTransformer = (schema, field) => {
+  if (isIndexCollection(field)) {
+    return field
+      .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      .updateIn(['type'], type => changeKind(type, 'LIST', 'INDEX_COLLECTION'));
+  } else {
+    return field;
+  }
+}
+
+
+export class Schema extends Object {
+
+  constructor(types, queryTypeName) {
+    super();
+
+    this.types = types;
+    this.queryTypeName = queryTypeName;
+
+    this.types = mapFields(this, referenceTransformer);
+    this.types = mapFields(this, indexCollectionTransformer);
+
+    // TODO: verify query type exists
+    // TODO: verify all types in fields / args have a type definition
   }
 
   getQueryType() {
-    return this.types.get('Query');
+    return this.types.get(this.queryTypeName);
   }
 
-  isScalar(field) {
-    return getBaseType(this, field).scalar;
-  }
-
-  isReferenceable(field) {
-    return !!this.getReferenceRoot(field);
-  }
-
-  isCollection(field) {
-    var typeId = field.type;
-    return Array.isArray(typeId) &&
-      typeId.indexOf('list') !== -1 &&
-      field.args.size >= 2 &&
-      field.args.get(0) === 'from' &&
-      field.args.get(1) === 'to';
-  }
-
-  getReferenceRoot(field) {
-    var type = getBaseType(this, field);
-    if (!type.scalar && type.fields.has('id')) {
-      return this.getQueryType().fields
-        .filter(field => field.args.size === 1 && field.args.get(0) === 'id')
-        .find(root => root.type === type.name);
+  getField(type, name) {
+    if (type instanceof TypeDefinition) {
+      var field = type.fields.find(field => field.name === name);
+      if (!field) {
+        throw `Field ${name} not found on type ${type.name}`;
+      }
+      return field;
+    } else if (type instanceof Type) {
+      if (type.ofType) {
+        return this.getField(type.ofType, name);
+      } else {
+        var typeDefinition = this.types.get(type.name);
+        return this.getField(typeDefinition, name);
+      }
+    } else {
+      throw `Unexpected type ${type}. Expected instance of TypeDefinition or Type`;
     }
   }
 
-  // TODO: add metadata to types / fields
-  // could determine reference roots / isCollection / isReferenceable once
-  // in this method instead of per call
-  static create(defs) {
-    return new Schema(Map(Object.keys(defs).map(key => {
-      return [key, type(key, defs[key])];
-    })));
+  getReferenceField(type) {
+    if (type.ofType) {
+      return this.getReferenceField(type.ofType);
+    } else {
+      var query = this.getQueryType();
+      return query.fields.find(field => isRoot(type, field));
+    }
+  }
+
+  static fromJSON(json) {
+    var types = Map(json.data.__schema.types
+      .filter(type => type.name.indexOf('__') !== 0) // remove the schema types
+      .map(type => [type.name, new TypeDefinition({
+        kind: type.kind,
+        name: type.name,
+        fields: List(type.fields).map(field => new FieldDefinition({
+          name: field.name,
+          type: toType(field.type),
+          args: List(field.args).map(arg => new Argument({
+            name: arg.name,
+            type: toType(arg.type)
+          }))
+        }))
+      })]));
+
+    return new Schema(types, json.data.__schema.queryType.name);
   }
 }

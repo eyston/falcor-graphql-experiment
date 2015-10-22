@@ -13,6 +13,7 @@ import {
   getOrganization,
   Organization,
   getRepository,
+  getRepositoryByName,
   getRepositories,
   Repository,
 } from './database';
@@ -30,6 +31,15 @@ var dateType = new GraphQLObjectType({
     year: { type: GraphQLInt, resolve: d => d.getFullYear() }
   })
 });
+
+var repositoryIndexedCollection = new GraphQLObjectType({
+  name: 'RepositoryIndexedCollection',
+  description: 'A collection with a length',
+  fields: () => ({
+    length: { type: GraphQLInt },
+    nodes: { type: new GraphQLList(repositoryType) }
+  })
+})
 
 var organizationType = new GraphQLObjectType({
   name: 'Organization',
@@ -56,6 +66,14 @@ var organizationType = new GraphQLObjectType({
         height: { type: GraphQLInt, defaultValue: 50 },
       },
       resolve: (org, args) => `http://placehold.it/${args.width}x${args.height}`
+    },
+    repositoriesTres: {
+      type: repositoryIndexedCollection,
+      args: {
+        from: { type: GraphQLInt },
+        to: { type: GraphQLInt }
+      },
+      resolve: (org, args) => ({ length: org.repos.length, nodes: getRepositories(org.repos).slice(args.from || 0, (args.to + 1) || 0) })
     },
     repositoriesOld: {
       type: new GraphQLList(repositoryType),
@@ -127,6 +145,13 @@ var queryType = new GraphQLObjectType({
         id: { type: new GraphQLNonNull(GraphQLInt) }
       },
       resolve: (_, {id}) => getRepository(id)
+    },
+    repositoryByName: {
+      type: repositoryType,
+      args: {
+        name: { type: new GraphQLNonNull(GraphQLString) }
+      },
+      resolve: (_, {name}) => getRepositoryByName(name)
     }
   })
 });

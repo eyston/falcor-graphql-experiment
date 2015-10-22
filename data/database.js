@@ -79,10 +79,8 @@ module.exports = {
   getEvents: () => events,
   getOrganization: (id) => Object.assign(new Organization(), organizations[id]),
   getRepository: (id) => repositories[id],
-  getRepositories: (ids) => {
-    console.log('ids', ids);
-    return ids ? ids.map(id => repositories[id]) : []
-  },
+  getRepositories: (ids) => ids ? ids.map(id => repositories[id]) : [],
+  getRepositoryByName: (name) => Object.keys(repositories).map(k => repositories[k]).find(r => r.name === name),
   Event,
   Organization,
   Repository

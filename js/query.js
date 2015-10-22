@@ -6,15 +6,41 @@ import querystring from 'querystring';
 export class Query extends Record({
   field: undefined,
   name: undefined, // maybe rename or something I dunno man
-  alias: undefined,
   args: List(),
-  range: List(),
+  // range: List(),
   children: List(),
 
-  graphKey: undefined,
-  responseKey: undefined,
+  // alias: undefined,
 
-}) { }
+  graphKey: undefined, // just use name dummy
+  // responseKey: undefined,
+
+}) {
+
+  alias() {
+    // would be cool to memoize this but I dunno how in immutable record!
+    if (!this.args.isEmpty()) {
+      var slug = this.args.map(arg => `.${arg.name}(${arg.value})`).join('');
+      return `${this.name}${Math.abs(crc32(slug)).toString(36)}`;
+    }
+  }
+
+  responseKey() {
+    // would be cool to memoize this too lulz
+    return this.alias() || this.name;
+  }
+
+  static build(field, attrs = Map()) {
+    // var alias = generateAlias(field.name, attrs.get('args'));
+    return new Query(Map({
+      field: field,
+      name: field.name,
+      // alias: alias,
+      graphKey: field.name,
+      // responseKey: alias || field.name,
+    }).merge(attrs));
+  }
+}
 
 var generateAlias = (name, args) => {
   if (args && !args.isEmpty()) {
@@ -95,20 +121,22 @@ var parseArgs = (field, path) => {
   }
 }
 
-var parseInnerType = (schema, field, path) => {
-  return parseField(schema, field.updateIn(['type'], type => type.ofType), path);
+var parseInnerType = (schema, query, field, path) => {
+  return parseField(schema, query, field.updateIn(['type'], type => type.ofType), path);
 }
 
 var parseNonNull = parseInnerType;
 
-var parseReference = (schema, field, path) => {
-  return parseInnerType(schema, field, path)
+var parseList = parseInnerType;
+
+var parseReference = (schema, query, field, path) => {
+  return parseInnerType(schema, query, field, path)
     .updateIn(['children'], children => {
       if (children.find(child => child.name === 'id')) {
         return children;
       } else {
         var idField = schema.getField(field.type, 'id');
-        return children.push(query(idField));
+        return children.push(Query.build(idField));
       }
     });
 }
@@ -150,45 +178,70 @@ var rangeToArguments = (range) => {
   );
 }
 
-var parseIndexCollection = (schema, field, path) => {
+var parseIndexCollection = (schema, query, field, path) => {
   var {range, path: rest} = parseIndexCollectionRange(field, path);
 
-  return Map({
-    range: rangeToArguments(range),
-  }).merge(parseInnerType(schema, field, rest));
+  return parseInnerType(
+    schema,
+    query.update('args', args => args.concat(rangeToArguments(range))),
+    field,
+    rest
+  );
 }
 
-var parseScalar = (_, field, path) => {
+var isRange = (pathSegment) => {
+  return Number.isInteger(pathSegment)
+    || (Array.isArray(pathSegment) && pathSegment.every(Number.isInteger))
+    || isObject(pathSegment);
+}
+
+var parseIndexLengthCollection = (schema, query, field, path) => {
+
+  if (isRange(path.first())) {
+    var {range, path: rest} = parseIndexCollectionRange(field, path);
+
+    var nodesField = schema.getField(field.type, 'nodes');
+    // var nodesQuery = List.of(Query.build(nodesField, Map({children: parseType(schema, nodesField.type, rest)})));
+    var nodesQuery = List.of(parseField(schema, Query.build(nodesField), nodesField, rest));
+
+    return query
+      .update('args', args => args.concat(rangeToArguments(range)))
+      .set('children', nodesQuery);
+  } else {
+    return query.set('children', parseType(schema, field.type, path));
+  }
+}
+
+var parseScalar = (schema, query, field, path) => {
   if (!path.isEmpty()) {
     throw `path should be empty after SCALAR kind but was ${path.toJS()}`
   }
 
-  return Map();
+  return query;
 }
 
-var parseObject = (schema, field, path) => {
-  var children = parseType(schema, field.type, path);
-
-  return Map({
-    children: children
-  });
+var parseObject = (schema, query, field, path) => {
+  return query.set('children', parseType(schema, field.type, path));
 }
 
-var parseField = (schema, field, path) => {
-  // TODO: support 'LIST'
+var parseField = (schema, query, field, path) => {
   // TODO: support 'CURSOR_COLLECTION'
 
   switch(field.type.kind) {
     case 'OBJECT':
-      return parseObject(schema, field, path);
+      return parseObject(schema, query, field, path);
     case 'SCALAR':
-      return parseScalar(schema, field, path);
+      return parseScalar(schema, query, field, path);
     case 'NON_NULL':
-      return parseNonNull(schema, field, path);
+      return parseNonNull(schema, query, field, path);
     case 'REFERENCE':
-      return parseReference(schema, field, path);
+      return parseReference(schema, query, field, path);
+    case 'LIST':
+      return parseList(schema, query, field, path);
     case 'INDEX_COLLECTION':
-      return parseIndexCollection(schema, field, path);
+      return parseIndexCollection(schema, query, field, path);
+    case 'INDEX_LENGTH_COLLECTION':
+      return parseIndexLengthCollection(schema, query, field, path);
     default:
       throw `Unhandled kind ${field.type.kind}`;
   }
@@ -202,7 +255,8 @@ var parseType = (schema, type, path) => {
     var args = parseArgs(field, rest);
 
     return args.args.map(arg => {
-      return query(field, parseField(schema, field, args.path).set('args', arg));
+      var query = Query.build(field, Map({args: arg}));
+      return parseField(schema, query, field, args.path);
     });
   });
 }
@@ -210,52 +264,4 @@ var parseType = (schema, type, path) => {
 export function parsePath (schema, path) {
   var type = schema.getQueryType();
   return parseType(schema, type, path);
-}
-
-
-
-var stringifyName = (query) => {
-  if (query.alias) {
-    return `${query.alias}:${query.field.name}`;
-  } else {
-    return query.field.name;
-  }
-}
-
-var stringifyField = (query) => {
-  return `${stringifyName(query)}${stringifyArgs(query)}${stringifyChildren(query.children)}`;
-}
-
-var stringifyChildren = (children) => {
-  if (children.isEmpty()) {
-    return '';
-  } else {
-    var fieldStrings = children.map(stringifyField);
-    return ` { ${fieldStrings.join(', ')} } `;
-  }
-}
-
-var stringifyArgValue = (query, arg) => {
-  // hacky
-  var fieldArg = query.field.args.find(farg => farg.name === arg.name);
-  if (fieldArg && fieldArg.type.baseType().name === 'String') {
-    return `"${arg.value}"`;
-  } else {
-    return `${arg.value}`;
-  }
-}
-
-var stringifyArgs = (query) => {
-  var args = query.args.concat(query.range);
-  if (args.isEmpty()) {
-    return '';
-  } else {
-    var argStrings = args.map(arg => `${arg.name}: ${stringifyArgValue(query, arg)}`);
-    return `(${argStrings.join(', ')})`;
-  }
-}
-
-export function stringifyQuery (query) {
-  var rootStrings = query.map(stringifyField);
-  return `query { ${rootStrings.join(', ')} }`;
 }

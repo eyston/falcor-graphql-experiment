@@ -6,7 +6,7 @@ var $ref = falcor.Model.ref;
 
 export function parseResponse(schema, queries, response) {
   return Map({jsonGraph: queries.reduce((graph, query) => {
-    return parseQuery(schema, graph, List(), query, response[query.responseKey]);
+    return parseQuery(schema, graph, List(), query, response[query.responseKey()]);
   }, Map())}).toJS();
 }
 
@@ -27,6 +27,8 @@ var parseQuery = (schema, graph, path, query, response) => {
       return parseReference(schema, graph, path, query, response);
     case 'INDEX_COLLECTION':
       return parseIndexCollection(schema, graph, path, query, response);
+    case 'INDEX_LENGTH_COLLECTION':
+      return parseIndexLengthCollection(schema, graph, path, query, response);
     default:
       throw `Unhandled kind ${query.field.type.kind}`;
   }
@@ -35,14 +37,22 @@ var parseQuery = (schema, graph, path, query, response) => {
 var queryPath = (query) => {
   var field = query.field;
   var args = field.args;
+
+  // TODO: add basicArgs function to Query and FieldDefinition
+  var basicArgs = query.args.filter(qarg => field.args.find(farg => farg.name === qarg.name));
+
   if (args.isEmpty()) {
     return List([query.graphKey]);
   } else if (args.size === 1 && args.first().isRequired()) {
     return List([query.graphKey]).push(query.args.first().value);
-  } else if (args.size > 1 && !query.args.isEmpty()) {
-    return List([query.graphKey]).push(query.args.map(arg => {
+  } else if (args.size > 1 && !basicArgs.isEmpty()) {
+    return List([query.graphKey]).push(basicArgs.map(arg => {
       return `${arg.name}=${arg.value}`;
     }).join('&'));
+  // } else if (args.size > 1 && !query.args.isEmpty()) {
+  //   return List([query.graphKey]).push(query.args.map(arg => {
+  //     return `${arg.name}=${arg.value}`;
+  //   }).join('&'));
   } else {
     // console.log('default', JSON.stringify(field.args, null, 2), JSON.stringify(query.args, null, 2));
     return List([query.graphKey, '__default__']);
@@ -53,7 +63,7 @@ var queryPath = (query) => {
 var parseObject = (schema, graph, path, query, response) => {
   var qp = path.concat(queryPath(query));
   return query.children.reduce((graph, query) => {
-    return parseQuery(schema, graph, qp, query, response[query.responseKey]);
+    return parseQuery(schema, graph, qp, query, response[query.responseKey()]);
   }, graph);
 }
 
@@ -84,8 +94,8 @@ var parseReference = (schema, graph, path, query, response) => {
 
 var parseIndexCollection = (schema, graph, path, query, response) => {
 
-  var startIndex = query.range.find(arg => arg.name === 'from').value;
-  var endIndex = query.range.find(arg => arg.name === 'to').value;
+  var startIndex = query.args.find(arg => arg.name === 'from').value;
+  var endIndex = query.args.find(arg => arg.name === 'to').value;
 
   var qp = path.concat(queryPath(query));
 
@@ -93,5 +103,24 @@ var parseIndexCollection = (schema, graph, path, query, response) => {
 
   return Range(startIndex, endIndex + 1).toArray().reduce((graph, collectionIndex, responseIndex) => {
     return parseInnerType(schema, graph, qp, element.set('graphKey', collectionIndex), response[responseIndex]);
+  }, graph);
+}
+
+var parseIndexLengthCollection = (schema, graph, path, query, response) => {
+
+  var qp = path.concat(queryPath(query));
+
+  return query.children.reduce((graph, child) => {
+    if (child.name === 'nodes') {
+      var startIndex = query.args.find(arg => arg.name === 'from').value;
+      var endIndex = query.args.find(arg => arg.name === 'to').value;
+      var nodes = response.nodes || [];
+
+      return Range(startIndex, endIndex + 1).toArray().reduce((graph, collectionIndex, responseIndex) => {
+        return parseInnerType(schema, graph, qp, child.set('graphKey', collectionIndex), nodes[responseIndex]);
+      }, graph);
+    } else {
+      return parseQuery(schema, graph, qp, child, response[child.responseKey()]);
+    }
   }, graph);
 }

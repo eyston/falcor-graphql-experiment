@@ -5,7 +5,8 @@ import request from 'superagent';
 import {Observable,AsyncSubject} from 'rx';
 
 import {Schema} from './schema';
-import {parsePath, stringifyQuery} from './query';
+import {parsePath} from './query';
+import {stringifyQuery} from './stringify';
 import {parseResponse} from './graph';
 
 import json from 'json!../data/schema.json';
@@ -31,10 +32,11 @@ class GraphQLDataSource extends Object {
         if (err) {
           subject.onError(err);
         } else {
-          // console.log('response', JSON.stringify(response.body.data, true, 2));
+          console.log('response', JSON.stringify(response.body.data, true, 2));
           var jsonGraph = parseResponse(schema, query, response.body.data);
+          // jsonGraph.paths = paths;
           console.log(JSON.stringify(jsonGraph, true, 2));
-          subject.onNext(JSON.parse(JSON.stringify(jsonGraph)));
+          subject.onNext(JSON.parse(JSON.stringify(jsonGraph))); // WTF?
           // subject.onNext(jsonGraph);
           subject.onCompleted();
         }
@@ -70,12 +72,16 @@ var args = (obj) => {
 //   console.log(name);
 // });
 
-
 model.get(
   ['repository', 19872456, 'organization', ['name', 'id', 'description']],
-  ['repository', 19872456, 'organization', 'repositories', args({startsWith: 'r'}), { to: 2 }, ['id', 'name']],
-  ['repository', 19872456, 'name']).then((graph) => {
-  console.log(graph);
+  ['repository', 19872456, 'organization', 'repositories', args(), { length: 5 }, ['name', 'description']],
+  ['repository', 19872456, 'organization', 'repositories', args({startsWith: 'r'}), { length: 5 }, ['name', 'description']],
+  ['repository', 19872456, 'organization', 'repositoriesTres', { length: 5 }, ['name', 'description']],
+  ['repository', 19872456, 'organization', 'repositoriesTres', 'length'],
+  ['repository', 19872456, 'name'],
+  ['repositoryByName', 'react-router', ['id', 'name', 'description']]
+  ).then((graph) => {
+  console.log(JSON.stringify(graph, null, 2));
 });
 
 // model.get(

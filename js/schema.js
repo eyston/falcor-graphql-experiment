@@ -121,6 +121,33 @@ var indexCollectionTransformer = (schema, field) => {
   }
 }
 
+var isIndexLengthCollection = (schema, field) => {
+  var baseType = field.type.baseType();
+  if (field.type.baseType().kind === 'OBJECT') {
+    var type = schema.types.get(baseType.name);
+    var lengthField = type.fields.find(field => field.name === 'length');
+    var nodesField = type.fields.find(field => field.name === 'nodes');
+
+    return lengthField
+      && lengthField.type.baseType().kind === 'SCALAR'
+      && lengthField.type.baseType().name === 'Int'
+      && nodesField
+      && containsKind(nodesField.type, 'LIST');
+  } else {
+    return false;
+  }
+}
+
+var indexLengthCollectionTransformer = (schema, field) => {
+  if (isIndexLengthCollection(schema, field)) {
+    return field
+      .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      .updateIn(['type'], type => changeKind(type, 'OBJECT', 'INDEX_LENGTH_COLLECTION'));
+  } else {
+    return field;
+  }
+}
+
 
 export class Schema extends Object {
 
@@ -132,6 +159,7 @@ export class Schema extends Object {
 
     this.types = mapFields(this, referenceTransformer);
     this.types = mapFields(this, indexCollectionTransformer);
+    this.types = mapFields(this, indexLengthCollectionTransformer);
 
     // TODO: verify query type exists
     // TODO: verify all types in fields / args have a type definition

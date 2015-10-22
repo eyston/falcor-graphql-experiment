@@ -1,20 +1,22 @@
 import {List,Map,Record} from 'immutable';
 
 import {crc32,isObject} from './utils';
-import querystring from 'querystring';
+
+class Context extends Record({
+  schema: undefined,
+  path: undefined,
+  cursors: undefined,
+}) {
+  prefixPath(fragment) {
+    return this.path.take(this.path.size - fragment.size);
+  }
+}
 
 export class Query extends Record({
   field: undefined,
   name: undefined, // maybe rename or something I dunno man
   args: List(),
-  // range: List(),
-  children: List(),
-
-  // alias: undefined,
-
-  graphKey: undefined, // just use name dummy
-  // responseKey: undefined,
-
+  children: List()
 }) {
 
   alias() {
@@ -31,33 +33,11 @@ export class Query extends Record({
   }
 
   static build(field, attrs = Map()) {
-    // var alias = generateAlias(field.name, attrs.get('args'));
     return new Query(Map({
       field: field,
       name: field.name,
-      // alias: alias,
-      graphKey: field.name,
-      // responseKey: alias || field.name,
     }).merge(attrs));
   }
-}
-
-var generateAlias = (name, args) => {
-  if (args && !args.isEmpty()) {
-    var slug = args.map(arg => `.${arg.name}(${arg.value})`).join('');
-    return `${name}${Math.abs(crc32(slug)).toString(36)}`;
-  }
-}
-
-var query = (field, attrs = Map()) => {
-  var alias = generateAlias(field.name, attrs.get('args'));
-  return new Query(Map({
-    field: field,
-    name: field.name,
-    alias: alias,
-    graphKey: field.name,
-    responseKey: alias || field.name,
-  }).merge(attrs));
 }
 
 export class Argument extends Record({
@@ -68,7 +48,11 @@ export class Argument extends Record({
 export class Range extends Record({
   to: undefined,
   from: undefined
-}) { }
+}) {
+  length() {
+    return (this.to - this.from) + 1;
+  }
+}
 
 var pop = (stack) => {
   return [stack.first(), stack.pop()];
@@ -83,10 +67,11 @@ var toList = (itemOrArray) => {
 }
 
 var parseArgs = (field, path) => {
-  if (field.args.isEmpty()) {
+  var basicArgs = field.basicArgs();
+  if (basicArgs.isEmpty()) {
     return {args: List.of(List()), path};
-  } else if (field.args.size === 1 && field.args.first().isRequired()) {
-    var arg = field.args.first();
+  } else if (basicArgs.size === 1 && basicArgs.first().isRequired()) {
+    var arg = basicArgs.first();
     var [value, rest] = pop(path);
     return {
       args: toList(value)
@@ -95,47 +80,38 @@ var parseArgs = (field, path) => {
     };
   } else {
     var [value, rest] = pop(path);
-    // TODO: replace this with something that handles all types ...
-    //       maybe copy GraphQL syntax instead of query string syntax
     return {
       args: toList(value)
-        .map(value => {
+        .map(valueString => {
           // TODO: validate that all named values exist yo
           // TODO: validate all required fields are provided ... mebe
-          if (value === '__default__') {
-            return List();
-          } else {
-            var values = querystring.parse(value);
-            return field.args.reduce((args, arg) => {
-              var name = arg.name;
-              if (values[name]) {
-                return args.push(new Argument({name, value: values[name]}));
-              } else {
-                return args;
-              }
-            }, List())
-          }
+          // TODO: handle InputObject and List ... right now its just shallow
+          var value = JSON.parse(valueString);
+
+          return List(Object.keys(value)).map(name => {
+            return new Argument({name, value: value[name]});
+          });
         }),
       path: rest
     };
   }
 }
 
-var parseInnerType = (schema, query, field, path) => {
-  return parseField(schema, query, field.updateIn(['type'], type => type.ofType), path);
+var parseInnerType = (ctx, query, field, path) => {
+  return parseField(ctx, query, field.updateIn(['type'], type => type.ofType), path);
 }
 
 var parseNonNull = parseInnerType;
 
 var parseList = parseInnerType;
 
-var parseReference = (schema, query, field, path) => {
-  return parseInnerType(schema, query, field, path)
+var parseReference = (ctx, query, field, path) => {
+  return parseInnerType(ctx, query, field, path)
     .updateIn(['children'], children => {
       if (children.find(child => child.name === 'id')) {
         return children;
       } else {
-        var idField = schema.getField(field.type, 'id');
+        var idField = ctx.schema.getField(field.type, 'id');
         return children.push(Query.build(idField));
       }
     });
@@ -178,11 +154,11 @@ var rangeToArguments = (range) => {
   );
 }
 
-var parseIndexCollection = (schema, query, field, path) => {
+var parseIndexCollection = (ctx, query, field, path) => {
   var {range, path: rest} = parseIndexCollectionRange(field, path);
 
   return parseInnerType(
-    schema,
+    ctx,
     query.update('args', args => args.concat(rangeToArguments(range))),
     field,
     rest
@@ -195,24 +171,62 @@ var isRange = (pathSegment) => {
     || isObject(pathSegment);
 }
 
-var parseIndexLengthCollection = (schema, query, field, path) => {
+var parseIndexLengthCollection = (ctx, query, field, path) => {
+  var {schema} = ctx;
 
   if (isRange(path.first())) {
     var {range, path: rest} = parseIndexCollectionRange(field, path);
 
     var nodesField = schema.getField(field.type, 'nodes');
-    // var nodesQuery = List.of(Query.build(nodesField, Map({children: parseType(schema, nodesField.type, rest)})));
-    var nodesQuery = List.of(parseField(schema, Query.build(nodesField), nodesField, rest));
+    var nodesQuery = List.of(parseField(ctx, Query.build(nodesField), nodesField, rest));
 
     return query
       .update('args', args => args.concat(rangeToArguments(range)))
       .set('children', nodesQuery);
   } else {
-    return query.set('children', parseType(schema, field.type, path));
+    return query.set('children', parseType(ctx, field.type, path));
   }
 }
 
-var parseScalar = (schema, query, field, path) => {
+var rangeToCursorArguments = (cursors, path, range) => {
+  var cursor = cursors.getCursor(path, range.from);
+
+  if (cursor) {
+    return List.of(
+      new Argument({name: 'first', value: (range.from - cursor.index - 1) + range.length() }),
+      new Argument({name: 'after', value: cursor.value})
+    );
+  } else {
+    return List.of(
+      new Argument({name: 'first', value: range.to + 1 })
+    );
+  }
+
+}
+
+var parseCursorCollection = (ctx, query, field, path) => {
+  var {schema} = ctx;
+  if (isRange(path.first())) {
+    var {range, path: rest} = parseIndexCollectionRange(field, path);
+
+    var edgesField = schema.getField(field.type, 'edges');
+    var nodeField = schema.getField(edgesField.type, 'node');
+    var cursorField = schema.getField(edgesField.type, 'cursor');
+
+    var edgesQuery = Query.build(edgesField, Map({children: List.of(
+      parseField(ctx, Query.build(nodeField), nodeField, rest),
+      Query.build(cursorField)
+    )}));
+
+    return query
+      .update('args', args => args.concat(rangeToCursorArguments(ctx.cursors, ctx.prefixPath(path), range)))
+      .set('children', List.of(edgesQuery));
+  } else {
+    return query.set('children', parseType(ctx, field.type, path));
+  }
+}
+
+var parseScalar = (ctx, query, field, path) => {
   if (!path.isEmpty()) {
     throw `path should be empty after SCALAR kind but was ${path.toJS()}`
   }
@@ -220,35 +234,36 @@ var parseScalar = (schema, query, field, path) => {
   return query;
 }
 
-var parseObject = (schema, query, field, path) => {
-  return query.set('children', parseType(schema, field.type, path));
+var parseObject = (ctx, query, field, path) => {
+  return query.set('children', parseType(ctx, field.type, path));
 }
 
-var parseField = (schema, query, field, path) => {
-  // TODO: support 'CURSOR_COLLECTION'
-
+var parseField = (ctx, query, field, path) => {
   switch(field.type.kind) {
     case 'OBJECT':
-      return parseObject(schema, query, field, path);
+      return parseObject(ctx, query, field, path);
     case 'SCALAR':
-      return parseScalar(schema, query, field, path);
+      return parseScalar(ctx, query, field, path);
     case 'NON_NULL':
-      return parseNonNull(schema, query, field, path);
+      return parseNonNull(ctx, query, field, path);
     case 'REFERENCE':
-      return parseReference(schema, query, field, path);
+      return parseReference(ctx, query, field, path);
     case 'LIST':
-      return parseList(schema, query, field, path);
+      return parseList(ctx, query, field, path);
     case 'INDEX_COLLECTION':
-      return parseIndexCollection(schema, query, field, path);
+      return parseIndexCollection(ctx, query, field, path);
     case 'INDEX_LENGTH_COLLECTION':
-      return parseIndexLengthCollection(schema, query, field, path);
+      return parseIndexLengthCollection(ctx, query, field, path);
+    case 'CURSOR_COLLECTION':
+      return parseCursorCollection(ctx, query, field, path);
     default:
       throw `Unhandled kind ${field.type.kind}`;
   }
 }
 
-var parseType = (schema, type, path) => {
+var parseType = (ctx, type, path) => {
   var [name, rest] = pop(path);
+  var {schema} = ctx;
 
   return toList(name).flatMap(name => {
     var field = schema.getField(type, name);
@@ -256,12 +271,13 @@ var parseType = (schema, type, path) => {
 
     return args.args.map(arg => {
       var query = Query.build(field, Map({args: arg}));
-      return parseField(schema, query, field, args.path);
+      return parseField(ctx, query, field, args.path);
     });
   });
 }
 
-export function parsePath (schema, path) {
+export function parsePath (schema, path, opts) {
+  var ctx = new Context({schema, path, ...opts});
   var type = schema.getQueryType();
-  return parseType(schema, type, path);
+  return parseType(ctx, type, path);
 }

@@ -9,8 +9,13 @@ class TypeDefinition extends Record({
 class FieldDefinition extends Record({
   name: undefined,
   type: undefined,
-  args: List()
-}) { }
+  args: List(),
+  range: List()
+}) {
+  basicArgs() {
+    return this.args.filterNot(arg => this.range.includes(arg.name));
+  }
+}
 
 class Argument extends Record({
   name: undefined,
@@ -114,7 +119,8 @@ var isIndexCollection = (field) => {
 var indexCollectionTransformer = (schema, field) => {
   if (isIndexCollection(field)) {
     return field
-      .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      // .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      .set('range', List.of('to', 'from'))
       .updateIn(['type'], type => changeKind(type, 'LIST', 'INDEX_COLLECTION'));
   } else {
     return field;
@@ -122,6 +128,7 @@ var indexCollectionTransformer = (schema, field) => {
 }
 
 var isIndexLengthCollection = (schema, field) => {
+  // TODO: should also test that it has to / from args
   var baseType = field.type.baseType();
   if (field.type.baseType().kind === 'OBJECT') {
     var type = schema.types.get(baseType.name);
@@ -141,8 +148,36 @@ var isIndexLengthCollection = (schema, field) => {
 var indexLengthCollectionTransformer = (schema, field) => {
   if (isIndexLengthCollection(schema, field)) {
     return field
-      .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      // .updateIn(['args'], args => args.filterNot(arg => arg.name === 'to' || arg.name === 'from'))
+      .set('range', List.of('to', 'from'))
       .updateIn(['type'], type => changeKind(type, 'OBJECT', 'INDEX_LENGTH_COLLECTION'));
+  } else {
+    return field;
+  }
+}
+
+var isCursorCollection = (schema, field) => {
+  var baseType = field.type.baseType();
+  if (baseType.kind === 'OBJECT'
+      && field.args.find(arg => arg.name === 'after')
+      && field.args.find(arg => arg.name === 'first')) {
+    var type = schema.types.get(baseType.name);
+
+    var edgesField = type.fields.find(field => field.name === 'edges');
+
+    return edgesField
+      && containsKind(edgesField.type, 'LIST')
+  } else {
+    return false;
+  }
+}
+
+var cursorCollectionTransformer = (schema, field) => {
+  if (isCursorCollection(schema, field)) {
+    return field
+      .set('range', List.of('first', 'after', 'last', 'before'))
+      // .updateIn(['args'], args => args.filterNot(arg => arg.name === 'first' || arg.name === 'after' || arg.name === 'last' || arg.name === 'before'))
+      .updateIn(['type'], type => changeKind(type, 'OBJECT', 'CURSOR_COLLECTION'));
   } else {
     return field;
   }
@@ -160,6 +195,7 @@ export class Schema extends Object {
     this.types = mapFields(this, referenceTransformer);
     this.types = mapFields(this, indexCollectionTransformer);
     this.types = mapFields(this, indexLengthCollectionTransformer);
+    this.types = mapFields(this, cursorCollectionTransformer);
 
     // TODO: verify query type exists
     // TODO: verify all types in fields / args have a type definition

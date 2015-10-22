@@ -1,87 +1,45 @@
-class Event extends Object { }
-class Organization extends Object { }
-class Repository extends Object { }
+import DataLoader from 'dataloader';
+import request from 'superagent';
 
-var events = [];
-for(var i = 0; i < 10; i++) {
-  var event = new Event();
-  event.id = i;
-  event.description = `Hardcoded Event ${i}`;
-  events.push(event);
-}
+export class GithubApi extends Object {
+  constructor() {
+    super();
 
-var organizations = {
-  69631: {
-    id: 69631,
-    login: 'facebook',
-    name: 'Facebook',
-    description: 'We work hard to contribute our work back to the web, mobile, big data, & infrastructure communities. NB: members must have two-factor auth.',
-    public_repos: 148,
-    created_at: '2009-04-02T03:35:22Z',
-    repos: [10270250],
-    repos_url: 'https://api.github.com/orgs/facebook/repos',
-    events_url: 'https://api.github.com/orgs/facebook/events',
-  },
-  8261421: {
-    id: 8261421,
-    login: 'rackt',
-    name: '',
-    description: 'Quality code from the React.js community',
-    public_repos: 13,
-    created_at: '2014-07-24T21:20:03Z',
-    repos: [19872456, 20636942, 20980532],
-    repos_url: 'https://api.github.com/orgs/rackt/repos',
-    events_url: 'https://api.github.com/orgs/rackt/events',
+    this.loader = new DataLoader(urls => new Promise((resolve, reject) => {
+      console.log('urls', urls);
+      var requests = urls.map(url => new Promise((resolve, reject) => {
+        console.log('GET', url);
+        request.get(url).end((err, res) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(res.body);
+          }
+        });
+      }));
+
+      Promise.all(requests).then(responses => {
+        resolve(responses);
+      }, reject);
+    }));
+
+    this.baseUrl = 'https://api.github.com/';
   }
-};
 
-var repositories = {
-  10270250: {
-    id: 10270250,
-    name: 'react',
-    full_name: 'facebook/react',
-    description: 'A declarative, efficient, and flexible JavaScript library for building user interfaces.',
-    organization: {
-      id: 69631
-    }
-  },
-  19872456: {
-    id: 19872456,
-    name: 'react-router',
-    full_name: 'rackt/react-router',
-    description: 'A complete routing solution for React.js',
-    organization: {
-      id: 8261421
-    }
-  },
-  20636942: {
-    id: 20636942,
-    name: 'react-autocomplete',
-    full_name: 'rackt/react-autocomplete',
-    description: 'WAI-ARIA compliant React autocomplete (combobox) component',
-    organization: {
-      id: 8261421
-    }
-  },
-  20980532: {
-    id: 20980532,
-    name: 'react-boilerplate',
-    full_name: 'rackt/react-boilerplate',
-    description: '',
-    organization: {
-      id: 8261421
-    }
-  },
-}
+  getUrl(url) {
+    console.log('getUrl', url);
+    return this.loader.load(url);
+  }
 
-module.exports = {
-  getEvent: (id) => events.find((ev) => ev.id === id),
-  getEvents: () => events,
-  getOrganization: (id) => Object.assign(new Organization(), organizations[id]),
-  getRepository: (id) => repositories[id],
-  getRepositories: (ids) => ids ? ids.map(id => repositories[id]) : [],
-  getRepositoryByName: (name) => Object.keys(repositories).map(k => repositories[k]).find(r => r.name === name),
-  Event,
-  Organization,
-  Repository
+  getRelativeUrl(fragment) {
+    return this.loader.load(this.baseUrl + fragment);
+  }
+
+  getOrganization(id) {
+    return this.getRelativeUrl(`orgs/${id}`);
+  }
+
+  getRepository(id) {
+    return this.getRelativeUrl(`repos/${id}`);
+  }
 }

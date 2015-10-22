@@ -10,13 +10,11 @@ import {
 } from 'graphql';
 
 import {
-  getOrganization,
-  Organization,
-  getRepository,
-  getRepositoryByName,
-  getRepositories,
-  Repository,
-} from './database';
+  connectionArgs,
+  connectionDefinitions,
+  connectionFromArray,
+} from 'graphql-relay';
+
 
 var dot = (field) => {
   return (obj) => obj[field];
@@ -39,13 +37,13 @@ var repositoryIndexedCollection = new GraphQLObjectType({
     length: { type: GraphQLInt },
     nodes: { type: new GraphQLList(repositoryType) }
   })
-})
+});
 
 var organizationType = new GraphQLObjectType({
   name: 'Organization',
   description: 'A Github Organization',
   fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLInt) },
+    id: { type: new GraphQLNonNull(GraphQLString), resolve: dot('login') },
     login: { type: GraphQLString },
     name: { type: GraphQLString },
     description: { type: GraphQLString },
@@ -67,23 +65,18 @@ var organizationType = new GraphQLObjectType({
       },
       resolve: (org, args) => `http://placehold.it/${args.width}x${args.height}`
     },
-    repositoriesTres: {
-      type: repositoryIndexedCollection,
-      args: {
-        from: { type: GraphQLInt },
-        to: { type: GraphQLInt }
-      },
-      resolve: (org, args) => ({ length: org.repos.length, nodes: getRepositories(org.repos).slice(args.from || 0, (args.to + 1) || 0) })
-    },
-    repositoriesOld: {
+    repositories: {
       type: new GraphQLList(repositoryType),
       args: {
         from: { type: new GraphQLNonNull(GraphQLInt) },
         to: { type: new GraphQLNonNull(GraphQLInt) }
       },
-      resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to + 1)
+      resolve: (org, args, ctx) => {
+        var api = ctx.rootValue.api;
+        return api.getUrl(org.repos_url).then(repos => repos.slice(args.from, args.to + 1));
+      }
     },
-    repositories: {
+    repositoriesWithArgs: {
       type: new GraphQLNonNull(new GraphQLList(repositoryType)),
       args: {
         from: { type: new GraphQLNonNull(GraphQLInt) },
@@ -91,8 +84,35 @@ var organizationType = new GraphQLObjectType({
         startsWith: { type: GraphQLString },
         orderBy: { type: GraphQLString }
       },
-      resolve: (org, args) => getRepositories(org.repos).slice(args.from, args.to + 1)
-        .filter(repo => args.startsWith ? repo.name && repo.name.indexOf(args.startsWith) === 0 : true)
+      resolve: (org, args, ctx) => {
+        var api = ctx.rootValue.api;
+        return api.getUrl(org.repos_url).then(repos => repos
+          .filter(repo => args.startsWith ? repo.name && repo.name.indexOf(args.startsWith) === 0 : true)
+          .slice(args.from, args.to + 1)
+        );
+      }
+    },
+    repositoriesWithLength: {
+      type: repositoryIndexedCollection,
+      args: {
+        from: { type: GraphQLInt },
+        to: { type: GraphQLInt }
+      },
+      resolve: (org, args, ctx) => {
+        var api = ctx.rootValue.api;
+        return api.getUrl(org.repos_url).then(repos => ({
+          length: repos && repos.length || 0,
+          nodes: repos.slice(args.from || 0, (args.to + 1) || 0)
+        }));
+      }
+    },
+    repositoriesWithCursor: {
+      type: repositoryConnectionType,
+      args: {...connectionArgs},
+      resolve: (org, args, ctx) => {
+        var api = ctx.rootValue.api;
+        return api.getUrl(org.repos_url).then(repos => connectionFromArray(repos, args));
+      }
     }
   })
 });
@@ -114,19 +134,25 @@ var repositoryType = new GraphQLObjectType({
   name: 'Repository',
   description: 'A Github Repository',
   fields: () => ({
-    id: { type: new GraphQLNonNull(GraphQLInt) },
+    id: { type: new GraphQLNonNull(GraphQLString), resolve: dot('full_name') },
     name: { type: GraphQLString },
     fullName: { type: GraphQLString, resolve: dot('full_name') },
     description: { type: GraphQLString },
     organization: {
       type: organizationType,
-      resolve: repo => getOrganization(repo.organization.id)
-    },
-    organizationDos: {
-      type: new GraphQLNonNull(organizationType),
-      resolve: repo => getOrganization(repo.organization.id)
+      resolve: (repo, _, ctx) => {
+        var api = ctx.rootValue.api;
+        if (repo.organization) {
+          return api.getUrl(repo.organization.url);
+        }
+      }
     }
   })
+});
+
+var {connectionType: repositoryConnectionType} = connectionDefinitions({
+  name: 'Repository',
+  nodeType: repositoryType
 });
 
 var queryType = new GraphQLObjectType({
@@ -135,23 +161,16 @@ var queryType = new GraphQLObjectType({
     organization: {
       type: organizationType,
       args: {
-        id: { type: new GraphQLNonNull(GraphQLInt) }
+        id: { type: new GraphQLNonNull(GraphQLString) }
       },
-      resolve: (_, {id}) => getOrganization(id)
+      resolve: ({api}, {id}) => api.getOrganization(id)
     },
     repository: {
       type: repositoryType,
       args: {
-        id: { type: new GraphQLNonNull(GraphQLInt) }
+        id: { type: new GraphQLNonNull(GraphQLString) }
       },
-      resolve: (_, {id}) => getRepository(id)
-    },
-    repositoryByName: {
-      type: repositoryType,
-      args: {
-        name: { type: new GraphQLNonNull(GraphQLString) }
-      },
-      resolve: (_, {name}) => getRepositoryByName(name)
+      resolve: ({api}, {id}) => api.getRepository(id)
     }
   })
 });

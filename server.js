@@ -6,6 +6,7 @@ import WebpackDevServer from 'webpack-dev-server';
 
 import graphQLHTTP from 'express-graphql';
 import {Schema} from './data/schema';
+import {GithubApi} from './data/database';
 
 
 const APP_PORT = 3000;
@@ -13,7 +14,7 @@ const GRAPHQL_PORT = 8080;
 
 // Expose a GraphQL endpoint
 var graphQLServer = express();
-graphQLServer.use('/', graphQLHTTP({schema: Schema, pretty: true}));
+graphQLServer.use('/', graphQLHTTP({schema: Schema, pretty: true, rootValue: {api: new GithubApi()}}));
 graphQLServer.listen(GRAPHQL_PORT, () => console.log(
   `GraphQL Server is now running on http://localhost:${GRAPHQL_PORT}`
 ));

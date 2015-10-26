@@ -1,4 +1,4 @@
-export function stringifyQuery (query) {
+export default function stringifyQuery (query) {
   var rootStrings = query.map(stringifyField);
   return `query { ${rootStrings.join(', ')} }`;
 }

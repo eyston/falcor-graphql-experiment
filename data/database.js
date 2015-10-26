@@ -6,7 +6,6 @@ export class GithubApi extends Object {
     super();
 
     this.loader = new DataLoader(urls => new Promise((resolve, reject) => {
-      console.log('urls', urls);
       var requests = urls.map(url => new Promise((resolve, reject) => {
         console.log('GET', url);
         request.get(url).end((err, res) => {
@@ -27,7 +26,6 @@ export class GithubApi extends Object {
   }
 
   getUrl(url) {
-    console.log('getUrl', url);
     return this.loader.load(url);
   }
 

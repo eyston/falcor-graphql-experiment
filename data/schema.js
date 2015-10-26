@@ -49,7 +49,7 @@ var organizationType = new GraphQLObjectType({
     description: { type: GraphQLString },
     publicRepos: { type: GraphQLInt, resolve: dot('public_repos') },
     created: { type: dateType, resolve: org => new Date(org.created_at) },
-    updated: { type: dateType, resolve: org => new Date(org.created_at) },
+    updated: { type: dateType, resolve: org => new Date(org.updated_at) },
     link: {
       type: GraphQLString,
       args: {

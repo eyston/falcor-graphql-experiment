@@ -1,9 +1,18 @@
+import {List} from 'immutable';
 
 export function isObject (value) {
   return value !== null && typeof(value) === 'object';
 }
 
-var makeCRCTable = function(){
+export function toList (itemOrArray) {
+  if (Array.isArray(itemOrArray)) {
+    return List(itemOrArray);
+  } else {
+    return List.of(itemOrArray);
+  }
+}
+
+const makeCRCTable = () => {
     var c;
     var crcTable = [];
     for(var n =0; n < 256; n++){
@@ -16,7 +25,7 @@ var makeCRCTable = function(){
     return crcTable;
 }
 
-var crcTable = makeCRCTable();
+const crcTable = makeCRCTable();
 
 export function crc32 (str) {
     var crc = 0 ^ (-1);
@@ -26,4 +35,4 @@ export function crc32 (str) {
     }
 
     return (crc ^ (-1)) >>> 0;
-};
+}
